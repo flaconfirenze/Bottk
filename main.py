@@ -40,7 +40,7 @@ API_URL = "https://mobile-pre.at.dz/api"
 PAIEMENT_URL = "https://paiement.algerietelecom.dz/AndroidApp/dette_paiement.php"
 
 # 🔒 Directly assign your Telegram Bot Token here
-TOKEN = '7829306127:AAEAKk_hdrTVNn7ehzPEp7iAc_wcIYWqAgc'  # Replace with your actual Telegram Bot Token
+TOKEN = '7662460998:AAH94PDWrJcq5e7CeKSuObP6Yd2IaKRpPUA'  # Replace with your actual Telegram Bot Token
 
 # Logging configuration
 logging.basicConfig(
