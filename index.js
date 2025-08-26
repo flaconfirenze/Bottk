@@ -39,7 +39,6 @@ async function getPyodide() {
 }
 
 // --- Embedded Python Bot Script ---
-// Your entire refactored Python bot logic is placed here.
 function getPythonScript() {
   const pythonCode = `
 import json
@@ -183,7 +182,6 @@ class APIClient:
         return {"success": False, "error": "API request failed"}
 
 # --- Telegram API Helper Functions ---
-# These functions replace the python-telegram-bot library methods.
 
 def send_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -207,7 +205,6 @@ def answer_callback_query(callback_query_id):
 # --- Bot Logic Handlers ---
 
 def get_main_menu_keyboard():
-    # Simplified menu for the stateless version
     keyboard = [
         [
             {"text": "🧾 تحقق من الفواتير (ADSL/Fibre)", "callback_data": "nd_fact"},
@@ -248,14 +245,12 @@ def handle_help_menu(chat_id, message_id):
     edit_message_text(chat_id, message_id, help_text, keyboard)
 
 # --- Main Entry Point for the Worker ---
-# This function is called on every request.
 def main(update_data, state_data):
     if not BOT_TOKEN:
-        return # Silently fail if token is not set
+        return
 
     api_client = APIClient(API_URL, PAIEMENT_URL)
 
-    # --- Part 1: Handle Callbacks (Button Presses) ---
     if 'callback_query' in update_data:
         query = update_data['callback_query']
         callback_id = query['id']
@@ -263,7 +258,7 @@ def main(update_data, state_data):
         message_id = query['message']['message_id']
         data = query['data']
 
-        answer_callback_query(callback_id) # Acknowledge the button press immediately
+        answer_callback_query(callback_id)
 
         if data == 'main_menu':
             edit_message_text(chat_id, message_id, "🏠 *القائمة الرئيسية*\\n\\nاختر الخدمة المطلوبة:", get_main_menu_keyboard())
@@ -271,7 +266,6 @@ def main(update_data, state_data):
         elif data == 'help_menu':
             handle_help_menu(chat_id, message_id)
             state_data['step'] = None
-        # Set the 'step' for the next text message
         elif data == 'nd_fact':
             edit_message_text(chat_id, message_id, "🧾 يرجى إدخال رقم الهاتف الثابت (ADSL/Fibre) للتحقق:")
             state_data['step'] = 'nd_fact_input'
@@ -286,21 +280,17 @@ def main(update_data, state_data):
             state_data['step'] = 'voucher_lte_nd_input'
         return
 
-    # --- Part 2: Handle Text Messages ---
     if 'message' in update_data:
         message = update_data['message']
         chat_id = message['chat']['id']
         text = message.get('text', '')
 
-        # --- Command Handling ---
         if text.startswith('/start'):
             user_name = message['from'].get('first_name', 'مستخدم')
             handle_start_command(chat_id, user_name)
             state_data['step'] = None
             return
 
-        # --- State-based Input Handling ---
-        # This is a simple replacement for ConversationHandler
         current_step = state_data.get('step')
 
         if current_step == 'nd_fact_input':
@@ -308,7 +298,7 @@ def main(update_data, state_data):
             response = api_client.check_nd_fact(text)
             info_text = format_nd_fact_info(response)
             send_message(chat_id, info_text, get_main_menu_keyboard())
-            state_data['step'] = None # Reset state
+            state_data['step'] = None
 
         elif current_step == 'get_ncli_input':
             send_message(chat_id, f"⏳ جار استرجاع NCLI للرقم \`{text}\`...")
@@ -366,7 +356,7 @@ def main(update_data, state_data):
 // Initialize the router.
 const router = Router();
 
-// This is the main webhook endpoint that Telegram will call.
+// Telegram webhook endpoint.
 router.post('/webhook', async (request, env) => {
   try {
     const pyodide = await getPyodide();
@@ -375,9 +365,7 @@ router.post('/webhook', async (request, env) => {
     // Set environment variables for the Python script.
     pyodide.globals.set('env', env);
 
-    // --- Simple State Management ---
-    // We use a temporary global variable to simulate state for a single conversation turn.
-    // For real multi-step conversations, you would need to use Cloudflare KV storage.
+    // Simple state (per request turn).
     pyodide.globals.set('state_data', new Map());
     pyodide.globals.set('update_data_json', JSON.stringify(update));
 
@@ -397,13 +385,10 @@ ${getPythonScript()}
 update_data = json.loads(update_data_json)
 
 # Execute the main function
-# The 'state_data' dictionary simulates context.user_data for one turn.
 main(update_data, state_data)
     `;
 
-    // We run this asynchronously but don't need the result.
-    // The Python script sends the reply directly to Telegram.
-    // We just need to return a 200 OK to Telegram quickly.
+    // Fire-and-forget the Python execution.
     pyodide.runPythonAsync(runnerScript).catch(e => console.error("Python script error:", e));
 
     // Acknowledge the webhook request immediately.
@@ -415,18 +400,14 @@ main(update_data, state_data)
   }
 });
 
-// A root route to confirm the worker is running.
+// Health check.
 router.get('/', () => new Response('Your Python Telegram Bot Worker is running!'));
 
-// Catch-all for any other requests.
+// Catch-all.
 router.all('*', () => new Response('Not Found.', { status: 404 }));
 
 export default {
   async fetch(request, env, ctx) {
-    // We use ctx.waitUntil to allow the async Python script to complete
-    // even after we have sent the 'OK' response to Telegram.
-    const response = router.handle(request, env, ctx);
-    ctx.waitUntil(response);
-    return response;
+    return router.handle(request, env, ctx);
   },
 };
