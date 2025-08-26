@@ -2,6 +2,3 @@ name = "telegram-bot-worker"
 main = "main:_asgi_app"
 compatibility_date = "2024-03-06"
 compatibility_flags = ["python_workers"]
-
-[build]
-command = "pip install -r requirements.txt"
