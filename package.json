@@ -1,16 +1,14 @@
 {
-  "name": "telegram-bot-worker-js",
+  "name": "python-telegram-bot-pyodide-worker",
   "version": "1.0.0",
-  "description": "Telegram bot for Algeria Telecom, rewritten in Node.js",
+  "description": "Python Telegram bot running on Cloudflare Workers via Pyodide",
   "main": "index.js",
   "scripts": {
-    "start": "wrangler dev",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "axios": "^1.7.2",
-    "telegraf": "^4.16.3",
-    "itty-router": "^5.0.17"
+    "itty-router": "^5.0.17",
+    "pyodide": "^0.25.1"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"

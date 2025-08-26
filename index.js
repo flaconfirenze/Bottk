@@ -1,248 +1,432 @@
-import { Telegraf, Scenes, session, Markup } from 'telegraf';
-import axios from 'axios';
+/**
+ * Cloudflare Worker for a Python Telegram Bot
+ *
+ * This script uses Pyodide to run a Python Telegram bot in a serverless environment.
+ * It's designed to be triggered by a Telegram webhook.
+ *
+ * How it works:
+ * 1. Telegram sends an update (new message, button click, etc.) as a JSON payload
+ * to this worker's URL via an HTTP POST request.
+ * 2. The worker initializes a Python environment using Pyodide.
+ * 3. It loads necessary Python packages like 'requests'.
+ * 4. It passes the Telegram update JSON and environment secrets (like BOT_TOKEN)
+ * to the embedded Python script.
+ * 5. The Python script processes the update, calls external APIs if needed, and
+ * uses 'requests' to call the Telegram API to send a reply.
+ * 6. The worker returns a 200 OK response to Telegram to acknowledge receipt of the update.
+ */
 import { Router } from 'itty-router';
 
-// --- Environment Variables ---
-// It's crucial to set these in your Cloudflare Worker's settings
-const TOKEN = env.TELEGRAM_TOKEN;
-const WEBHOOK_URL = env.WEBHOOK_URL;
+// --- Pyodide Initialization ---
+// We cache the Pyodide instance to avoid slow cold starts on every request.
+let pyodideInstance;
 
-// --- API Configuration ---
-const API_URL = "https://mobile-pre.at.dz/api";
-const PAIEMENT_URL = "https://paiement.algerietelecom.dz/AndroidApp/dette_paiement.php";
-
-// --- Input Validation Regex ---
-const PHONE_PATTERN = /^0\d{9}$/;
-const EMAIL_PATTERN = /^[\w\.-]+@[\w\.-]+\.\w+$/;
-const VOUCHER_PATTERN = /^\d{16}$/;
-const OTP_PATTERN = /^\d{6}$/;
-
-
-// --- API Client Functions ---
-
-const apiClient = axios.create({
-    headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "User-Agent": "Dart/3.0 (dart:io)",
-        "Accept-Encoding": "gzip"
-    }
-});
-
-async function retrieve_ncli(nd) {
-    const payload = `ndco20=${nd}&validerco20=Confirmer&nfactco20=&`;
-    const headers = {
-        "Authorization": "Basic VEdkNzJyOTozUjcjd2FiRHNfSGpDNzg3IQ==",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 10; M2004J19C MIUI/V12.0.4.0.QJCMIXM)",
-        "Host": "paiement.algerietelecom.dz",
-        "Connection": "Keep-Alive",
-        "Accept-Encoding": "gzip",
-    };
-    try {
-        const response = await axios.post(PAIEMENT_URL, payload, { headers });
-        // The response is not JSON, it's a weird text format. We need to parse it manually.
-        // Assuming the response is JSON after cleaning
-        const cleanText = response.data.replace(/^\uFEFF/, '').trim();
-        const jsonResponse = JSON.parse(cleanText);
-
-        if (jsonResponse.succes === 1) {
-            return jsonResponse.ncli || "غير متوفر";
-        } else {
-            throw new Error(`فشل في استرجاع رقم الزبون. رمز الخطأ: ${jsonResponse.succes}`);
-        }
-    } catch (error) {
-        console.error("NCLI retrieval error:", error.message);
-        throw new Error("حدث خطأ أثناء استرجاع رقم الزبون.");
-    }
+async function loadPyodideInstance() {
+  const { loadPyodide } = await import('pyodide');
+  const pyodide = await loadPyodide({
+    indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/',
+  });
+  // Load the 'requests' library, which is essential for making HTTP calls in Python.
+  await pyodide.loadPackage('requests');
+  return pyodide;
 }
 
-// --- Formatting Functions ---
-
-function formatAccountInfo(data) {
-    return [
-        "📊 معلومات الحساب:",
-        `👤 الاسم: ${data.prenom || ''} ${data.nom || ''}`,
-        `📱 رقم الهاتف: ${data.nd || ''}`,
-        `🏠 العنوان: ${data.adresse || ''}`,
-        `📡 العرض: ${data.offre || ''}`,
-        `⚡ السرعة: ${data.speed || ''} Mbps`,
-        `💲 رصيدالهاتف: ${data.credit || '0'} DA`,
-        `💰 عدد الأيام المتبقية: ${data.balance || '0'} يوم`,
-        `📅 تاريخ الانتهاء: ${data.dateexp || ''}`,
-        `📞 الهاتف المحمول: ${data.mobile || ''}`,
-        `📧 البريد الإلكتروني: ${data.email || ''}`,
-        `🆔 رقم الزبون: ${data.ncli || ''}`,
-        `📊 الحالة: ${data.status || ''}`,
-        `💫 النوع: ${data.type1 || ''}`
-    ].join('\n');
+async function getPyodide() {
+  if (!pyodideInstance) {
+    pyodideInstance = loadPyodideInstance();
+  }
+  return await pyodideInstance;
 }
 
-// ... other formatting functions can be translated similarly ...
+// --- Embedded Python Bot Script ---
+// Your entire refactored Python bot logic is placed here.
+function getPythonScript() {
+  const pythonCode = `
+import json
+import requests
+import os
+from enum import Enum
+
+# --- Configuration & Globals ---
+API_URL = "https://mobile-pre.at.dz/api"
+PAIEMENT_URL = "https://paiement.algerietelecom.dz/AndroidApp"
+
+# This will be read from the worker's environment secrets
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+
+# --- Formatting Functions (Copied from your original script) ---
+# These functions format the API responses into user-friendly messages.
+
+def format_nd_fact_info(data: dict) -> str:
+    info_data = data.get('INFO', {})
+    if not info_data:
+        return f"❌ فشل في الحصول على معلومات الرقم.\\nالرسالة: {data.get('message', 'خطأ غير معروف')}"
+    return (
+        "*📊 معلومات الرقم*\\n\\n"
+        f"📱 *الرقم*: \`{info_data.get('nd', 'غير متوفر')}\`\\n"
+        f"💰 *الرصيد*: \`{info_data.get('credit', '0')} DA\`"
+    )
+
+def format_ncli_response(ncli: str) -> str:
+    return (
+        "*✅ تم العثور على رقم الزبون*\\n\\n"
+        f"🆔 *رقم الزبون (NCLI)*: \`{ncli}\`\\n\\n"
+        "📝 _احفظ هذا الرقم لاستخدامه في عمليات التسجيل والشحن._"
+    )
+
+def format_voucher_response(response: dict) -> str:
+    code = response.get('code', '')
+    trans_info = response.get('TRANS')
+    message = response.get('message', 'خطأ غير معروف')
+
+    if str(code) == "0":
+        if isinstance(trans_info, dict):
+            transaction_num = trans_info.get('num_trans', 'غير متوفر')
+            date_transaction = trans_info.get('date_transaction', 'غير متوفر')
+            heure_transaction = trans_info.get('heure_transaction', 'غير متوفر')
+            service = trans_info.get('service', 'غير متوفر')
+            return (
+                "✅ *تم شحن الرصيد بنجاح!*\\n"
+                "*📊 معلومات العملية:*\\n\\n"
+                f"🔢 *رقم العملية*: \`{transaction_num}\`\\n"
+                f"📅 *التاريخ*: \`{date_transaction}\`\\n"
+                f"⏱️ *الوقت*: \`{heure_transaction}\`\\n"
+                f"⚙️ *الخدمة*: \`{service}\`"
+            )
+        else:
+            return "✅ *تم شحن الرصيد بنجاح، ولكن بدون تفاصيل العملية.*"
+    else:
+        error_map = {"9": "رمز القسيمة غير صالح أو مستخدم."}
+        specific_message = error_map.get(str(code), message)
+        return f"❌ *فشل في شحن الرصيد.*\\n*رمز الخطأ*: \`{code}\`\\n*الرسالة*: {specific_message}"
 
 
-// --- Bot Setup ---
-const bot = new Telegraf(TOKEN);
-
-// --- Conversation Scenes ---
-// We use scenes to handle multi-step conversations, similar to ConversationHandler in python-telegram-bot
-
-// Helper function to create a text prompt scene
-const createTextPromptScene = (sceneId, promptMessage, nextSceneId, validationRegex = null, validationMessage = null) => {
-    const scene = new Scenes.BaseScene(sceneId);
-    scene.enter((ctx) => ctx.reply(promptMessage));
-    scene.on('text', (ctx) => {
-        const text = ctx.message.text.trim();
-        if (validationRegex && !validationRegex.test(text)) {
-            return ctx.reply(validationMessage || '⚠️ إدخال غير صالح. يرجى المحاولة مرة أخرى.');
+# --- API Client Class (Refactored to use 'requests') ---
+class APIClient:
+    def __init__(self, base_url, paiement_url):
+        self.base_url = base_url
+        self.paiement_url = paiement_url
+        self._default_mobile_headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": "Dart/3.0 (dart:io)",
+            "Accept-Encoding": "gzip",
+            "Accept": "application/json",
         }
-        ctx.scene.state[sceneId] = text; // Save data to scene state
-        return ctx.scene.enter(nextSceneId, ctx.scene.state);
-    });
-    scene.use((ctx) => ctx.reply('يرجى إرسال نص فقط.'));
-    return scene;
-};
-
-
-// Login Scene
-const loginNdScene = createTextPromptScene('LOGIN_ND_SCENE', 'يرجى إدخال رقم الهاتف الخاص بك:', 'LOGIN_PASSWORD_SCENE');
-const loginPasswordScene = new Scenes.BaseScene('LOGIN_PASSWORD_SCENE');
-loginPasswordScene.enter((ctx) => ctx.reply('يرجى إدخال كلمة المرور:'));
-loginPasswordScene.on('text', async (ctx) => {
-    const password = ctx.message.text;
-    const { LOGIN_ND_SCENE: nd } = ctx.scene.state;
-
-    try {
-        await ctx.deleteMessage(); // Try to delete password message
-    } catch (e) { /* ignore */ }
-
-    try {
-        const response = await apiClient.post(`${API_URL}/auth/login_new`, { nd, password, lang: 'fr' });
-        const token = response.data?.meta_data?.original?.token;
-
-        if (token) {
-            const accountInfo = await apiClient.get(`${API_URL}/compte_augmentation_debit`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            ctx.session.accountInfo = accountInfo.data;
-            ctx.session.token = token;
-
-            await ctx.reply('✅ تم تسجيل الدخول بنجاح!', Markup.inlineKeyboard([
-                Markup.button.callback('معلومات الحساب', 'account_info'),
-                Markup.button.callback('تسجيل خروج', 'logout')
-            ]));
-        } else {
-            await ctx.reply('❌ فشل تسجيل الدخول. يرجى التحقق من بيانات الدخول والمحاولة مرة أخرى.');
+        self._default_paiement_headers = {
+            "Authorization": "Basic VEdkNzJyOTozUjcjd2FiRHNfSGpDNzg3IQ==",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 10; M2004J19C MIUI/V12.0.4.0.QJCMIXM)",
+            "Host": "paiement.algerietelecom.dz",
+            "Connection": "Keep-Alive",
+            "Accept-Encoding": "gzip",
         }
-    } catch (error) {
-        console.error('Login error:', error.message);
-        await ctx.reply('❌ حدث خطأ أثناء تسجيل الدخول.');
-    }
 
-    return ctx.scene.leave();
-});
+    def _request(self, method: str, url: str, **kwargs) -> tuple[int, dict | str]:
+        try:
+            response = requests.request(method, url, **kwargs, timeout=30)
+            status_code = response.status_code
+            try:
+                json_response = response.json()
+                return status_code, json_response
+            except json.JSONDecodeError:
+                text_response = response.text
+                if status_code != 200:
+                    return status_code, {"error": "Server returned non-JSON response", "details": text_response.strip()}
+                return status_code, text_response.strip()
+        except requests.RequestException as e:
+            return 503, {"error": "Network connection failed", "details": str(e)}
 
-// Get NCLI Scene
-const getNcliScene = new Scenes.BaseScene('GET_NCLI_SCENE');
-getNcliScene.enter((ctx) => ctx.reply('يرجى إدخال رقم الهاتف لاسترجاع رقم الزبون:'));
-getNcliScene.on('text', async (ctx) => {
-    const nd = ctx.message.text.trim();
-    if (!/^\d+$/.test(nd)) {
-        return ctx.reply('⚠️ يرجى إدخال رقم هاتف صالح.');
-    }
-    try {
-        const ncli = await retrieve_ncli(nd);
-        await ctx.reply(`🆔 رقم الزبون: ${ncli}`);
-    } catch (error) {
-        await ctx.reply(error.message);
-    }
-    return ctx.scene.leave();
-});
+    def check_nd_fact(self, nd: str) -> dict:
+        url = f"{self.base_url}/epay/checkNdFact"
+        payload = {"nd": nd, "nfact": "", "service": "Internet"}
+        status, response_data = self._request("POST", url, json=payload, headers=self._default_mobile_headers)
+        return response_data if isinstance(response_data, dict) else {"error": "API response error"}
 
+    def check_nd_lte(self, nd: str) -> dict:
+        url = f"{self.base_url}/epay/checkNdLte"
+        payload = {"nd": nd}
+        status, response_data = self._request("POST", url, json=payload, headers=self._default_mobile_headers)
+        return response_data if isinstance(response_data, dict) else {"error": "API response error"}
 
-// --- Staging and Registering Scenes ---
-const stage = new Scenes.Stage([loginNdScene, loginPasswordScene, getNcliScene]);
-bot.use(session());
-bot.use(stage.middleware());
+    def use_voucher_lte(self, nd: str, ncli: str, voucher: str, type1: str, ip: str = "0.0.0.0") -> dict:
+        url = f"{self.base_url}/epay/voucherLte"
+        payload = {"nd": nd, "ncli": ncli, "type": type1, "voucher": voucher, "ip": ip}
+        status, response_data = self._request("POST", url, json=payload, headers=self._default_mobile_headers)
+        return response_data if isinstance(response_data, dict) else {"error": "API response error"}
 
+    def retrieve_ncli(self, phone_number: str) -> dict:
+        url = f"{self.paiement_url}/internet_recharge.php"
+        payload = f"validerADSLco20=Confirmer&ndco20={phone_number}&"
+        status, response_data = self._request("POST", url, data=payload, headers=self._default_paiement_headers)
+        if status == 200 and isinstance(response_data, str):
+            try:
+                clean_text = response_data.lstrip('\\ufeff').strip()
+                json_response = json.loads(clean_text)
+                json_response['success'] = json_response.get("succes") == "1"
+                return json_response
+            except json.JSONDecodeError:
+                return {"success": False, "error": "Invalid JSON response"}
+        return {"success": False, "error": "API request failed"}
 
-// --- Bot Commands and Actions ---
+    def retrieve_ncli_4glte(self, phone_number: str) -> dict:
+        url = f"{self.paiement_url}/voucher_internet.php"
+        payload = f"dahabiaco20=Confirmer&nd_4gco20={phone_number}&"
+        status, response_data = self._request("POST", url, data=payload, headers=self._default_paiement_headers)
+        if status == 200 and isinstance(response_data, str):
+            try:
+                clean_text = response_data.lstrip('\\ufeff').strip()
+                json_response = json.loads(clean_text)
+                json_response['success'] = json_response.get("succes") == "1"
+                return json_response
+            except json.JSONDecodeError:
+                return {"success": False, "error": "Invalid JSON response"}
+        return {"success": False, "error": "API request failed"}
 
-bot.start((ctx) => {
-    ctx.reply('👋 مرحبًا بك في بوت الجزائر تيليكوم!\n\nيرجى اختيار أحد الخيارات التالية:', Markup.inlineKeyboard([
-        // [Markup.button.callback("تسجيل", "register")], // Register scene not implemented yet
-        [Markup.button.callback("تسجيل الدخول", "login")],
-        // [Markup.button.callback("تحقق من الفواتير", "nd_fact")], // Not implemented yet
-        // [Markup.button.callback("شحن adsl عبر القسيمة", "recharge_voucher")], // Not implemented yet
-        // [Markup.button.callback("شحن LTE عبر القسيمة", "recharge_voucher_lte")], // Not implemented yet
-        [Markup.button.callback("الحصول على رقم الزبون", "get_ncli")],
-    ]));
-});
+# --- Telegram API Helper Functions ---
+# These functions replace the python-telegram-bot library methods.
 
-bot.action('login', (ctx) => ctx.scene.enter('LOGIN_ND_SCENE'));
-bot.action('get_ncli', (ctx) => ctx.scene.enter('GET_NCLI_SCENE'));
+def send_message(chat_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    requests.post(url, json=payload)
 
-bot.action('account_info', (ctx) => {
-    if (ctx.session.accountInfo) {
-        ctx.editMessageText(formatAccountInfo(ctx.session.accountInfo), Markup.inlineKeyboard([
-             Markup.button.callback("العودة إلى القائمة الرئيسية", "main_menu")
-        ]));
-    } else {
-        ctx.reply('❌ لا توجد معلومات حساب متاحة. يرجى تسجيل الدخول أولاً.');
-    }
-});
+def edit_message_text(chat_id, message_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    requests.post(url, json=payload)
 
-bot.action('logout', (ctx) => {
-    ctx.session = {}; // Clear session
-    ctx.editMessageText('✅ تم تسجيل خروجك. أرسل /start للبدء مرة أخرى.');
-});
+def answer_callback_query(callback_query_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_query_id}
+    requests.post(url, json=payload)
 
-bot.action('main_menu', (ctx) => {
-     ctx.editMessageText('👋 مرحبًا بك في بوت الجزائر تيليكوم!\n\nيرجى اختيار أحد الخيارات التالية:', Markup.inlineKeyboard([
-        // [Markup.button.callback("تسجيل", "register")],
-        [Markup.button.callback("تسجيل الدخول", "login")],
-        // [Markup.button.callback("تحقق من الفواتير", "nd_fact")],
-        // [Markup.button.callback("شحن adsl عبر القسيمة", "recharge_voucher")],
-        // [Markup.button.callback("شحن LTE عبر القسيمة", "recharge_voucher_lte")],
-        [Markup.button.callback("الحصول على رقم الزبون", "get_ncli")],
-    ]));
-});
+# --- Bot Logic Handlers ---
 
-// --- Webhook Setup ---
+def get_main_menu_keyboard():
+    # Simplified menu for the stateless version
+    keyboard = [
+        [
+            {"text": "🧾 تحقق من الفواتير (ADSL/Fibre)", "callback_data": "nd_fact"},
+            {"text": "🆔 NCLI (ADSL/Fibre)", "callback_data": "get_ncli"},
+        ],
+        [
+            {"text": "📶 شحن (4G LTE) بالقسيمة", "callback_data": "recharge_voucher_lte"},
+            {"text": "🆔 NCLI (4G LTE)", "callback_data": "get_ncli_4glte"},
+        ],
+        [
+            {"text": "❓ مساعدة", "callback_data": "help_menu"}
+        ]
+    ]
+    return {"inline_keyboard": keyboard}
+
+def handle_start_command(chat_id, user_name):
+    welcome_message = (
+        f"👋 مرحبًا بك يا {user_name} في بوت خدمات الجزائر تيليكوم!\\n\\n"
+        "هذه نسخة مبسطة تعمل في بيئة سحابية.\\n\\n"
+        "*✨ الخدمات المتاحة حاليًا: ✨*\\n"
+        "• التحقق من الفواتير والرصيد\\n"
+        "• شحن الرصيد (4G LTE)\\n"
+        "• استرجاع رقم الزبون (NCLI)\\n\\n"
+        "📱 يرجى اختيار الخدمة المطلوبة:"
+    )
+    send_message(chat_id, welcome_message, get_main_menu_keyboard())
+
+def handle_help_menu(chat_id, message_id):
+    help_text = (
+        "*❓ قائمة المساعدة ❓*\\n\\n"
+        "هذا البوت يساعدك في الوصول إلى خدمات الجزائر تيليكوم:\\n\\n"
+        "• *تحقق من الفواتير*: لعرض الرصيد لرقم ADSL/Fibre.\\n"
+        "• *الحصول على NCLI*: استرجاع رقم الزبون لـ ADSL/Fibre أو 4G LTE.\\n"
+        "• *شحن 4G LTE*: لشحن حساب 4G LTE باستخدام قسائم التعبئة.\\n\\n"
+        "ℹ️ _ميزات تسجيل الدخول وإنشاء الحساب تتطلب بنية مختلفة وسيتم إضافتها لاحقًا._"
+    )
+    keyboard = {"inline_keyboard": [[{"text": "⬅️ العودة إلى القائمة الرئيسية", "callback_data": "main_menu"}]]}
+    edit_message_text(chat_id, message_id, help_text, keyboard)
+
+# --- Main Entry Point for the Worker ---
+# This function is called on every request.
+def main(update_data, state_data):
+    if not BOT_TOKEN:
+        return # Silently fail if token is not set
+
+    api_client = APIClient(API_URL, PAIEMENT_URL)
+
+    # --- Part 1: Handle Callbacks (Button Presses) ---
+    if 'callback_query' in update_data:
+        query = update_data['callback_query']
+        callback_id = query['id']
+        chat_id = query['message']['chat']['id']
+        message_id = query['message']['message_id']
+        data = query['data']
+
+        answer_callback_query(callback_id) # Acknowledge the button press immediately
+
+        if data == 'main_menu':
+            edit_message_text(chat_id, message_id, "🏠 *القائمة الرئيسية*\\n\\nاختر الخدمة المطلوبة:", get_main_menu_keyboard())
+            state_data['step'] = None
+        elif data == 'help_menu':
+            handle_help_menu(chat_id, message_id)
+            state_data['step'] = None
+        # Set the 'step' for the next text message
+        elif data == 'nd_fact':
+            edit_message_text(chat_id, message_id, "🧾 يرجى إدخال رقم الهاتف الثابت (ADSL/Fibre) للتحقق:")
+            state_data['step'] = 'nd_fact_input'
+        elif data == 'get_ncli':
+            edit_message_text(chat_id, message_id, "🆔 يرجى إدخال رقم الهاتف الثابت (ADSL/Fibre) لاسترجاع رقم الزبون:")
+            state_data['step'] = 'get_ncli_input'
+        elif data == 'get_ncli_4glte':
+            edit_message_text(chat_id, message_id, "🆔 يرجى إدخال رقم شريحة 4G LTE لاسترجاع رقم الزبون:")
+            state_data['step'] = 'get_ncli_4glte_input'
+        elif data == 'recharge_voucher_lte':
+            edit_message_text(chat_id, message_id, "📶 يرجى إدخال رقم شريحة 4G LTE للشحن:")
+            state_data['step'] = 'voucher_lte_nd_input'
+        return
+
+    # --- Part 2: Handle Text Messages ---
+    if 'message' in update_data:
+        message = update_data['message']
+        chat_id = message['chat']['id']
+        text = message.get('text', '')
+
+        # --- Command Handling ---
+        if text.startswith('/start'):
+            user_name = message['from'].get('first_name', 'مستخدم')
+            handle_start_command(chat_id, user_name)
+            state_data['step'] = None
+            return
+
+        # --- State-based Input Handling ---
+        # This is a simple replacement for ConversationHandler
+        current_step = state_data.get('step')
+
+        if current_step == 'nd_fact_input':
+            send_message(chat_id, f"⏳ جار التحقق من معلومات الرقم \`{text}\`...")
+            response = api_client.check_nd_fact(text)
+            info_text = format_nd_fact_info(response)
+            send_message(chat_id, info_text, get_main_menu_keyboard())
+            state_data['step'] = None # Reset state
+
+        elif current_step == 'get_ncli_input':
+            send_message(chat_id, f"⏳ جار استرجاع NCLI للرقم \`{text}\`...")
+            response = api_client.retrieve_ncli(text)
+            if response.get('success'):
+                info_text = format_ncli_response(response.get('ncli', 'غير متوفر'))
+            else:
+                info_text = f"❌ {response.get('error', 'فشل في استرجاع رقم الزبون.')}"
+            send_message(chat_id, info_text, get_main_menu_keyboard())
+            state_data['step'] = None
+
+        elif current_step == 'get_ncli_4glte_input':
+            send_message(chat_id, f"⏳ جار استرجاع NCLI للرقم \`{text}\`...")
+            response = api_client.retrieve_ncli_4glte(text)
+            if response.get('success'):
+                info_text = format_ncli_response(response.get('ncli', 'غير متوفر'))
+            else:
+                info_text = f"❌ {response.get('error', 'فشل في استرجاع رقم الزبون.')}"
+            send_message(chat_id, info_text, get_main_menu_keyboard())
+            state_data['step'] = None
+
+        elif current_step == 'voucher_lte_nd_input':
+            state_data['lte_nd'] = text
+            send_message(chat_id, "🔢 يرجى إدخال رمز قسيمة LTE (16 رقم):")
+            state_data['step'] = 'voucher_lte_code_input'
+
+        elif current_step == 'voucher_lte_code_input':
+            nd_lte = state_data.get('lte_nd')
+            voucher_code = text
+            if not nd_lte:
+                send_message(chat_id, "❌ حدث خطأ. يرجى البدء من جديد.", get_main_menu_keyboard())
+                state_data['step'] = None
+                return
+
+            send_message(chat_id, f"⏳ جار التحقق من رقم LTE \`{nd_lte}\` وشحن القسيمة...")
+            check_response = api_client.check_nd_lte(nd_lte)
+            if check_response and str(check_response.get('code')) == '0':
+                ncli_lte = check_response.get('ncli')
+                type1 = check_response.get('type1')
+                if ncli_lte and type1:
+                    recharge_response = api_client.use_voucher_lte(nd_lte, ncli_lte, voucher_code, type1)
+                    info_text = format_voucher_response(recharge_response)
+                else:
+                    info_text = "❌ فشل التحقق من تفاصيل رقم LTE. لا يمكن المتابعة."
+            else:
+                info_text = f"❌ {check_response.get('message', 'فشل التحقق من رقم LTE.')}"
+
+            send_message(chat_id, info_text, get_main_menu_keyboard())
+            state_data['step'] = None
+            state_data['lte_nd'] = None
+`;
+  return pythonCode;
+}
+
+// Initialize the router.
 const router = Router();
 
-// This endpoint will be called by Telegram
-router.post(`/${TOKEN}`, async (request) => {
+// This is the main webhook endpoint that Telegram will call.
+router.post('/webhook', async (request, env) => {
+  try {
+    const pyodide = await getPyodide();
     const update = await request.json();
-    await bot.handleUpdate(update);
+
+    // Set environment variables for the Python script.
+    pyodide.globals.set('env', env);
+
+    // --- Simple State Management ---
+    // We use a temporary global variable to simulate state for a single conversation turn.
+    // For real multi-step conversations, you would need to use Cloudflare KV storage.
+    pyodide.globals.set('state_data', new Map());
+    pyodide.globals.set('update_data_json', JSON.stringify(update));
+
+    const runnerScript = `
+import json
+import os
+from js import env, update_data_json, state_data
+
+# Make secrets from Cloudflare available as environment variables
+for key, value in env.to_py().items():
+    os.environ[key] = value
+
+# Load the main bot script
+${getPythonScript()}
+
+# Get the update data from the JSON string passed by JavaScript
+update_data = json.loads(update_data_json)
+
+# Execute the main function
+# The 'state_data' dictionary simulates context.user_data for one turn.
+main(update_data, state_data)
+    `;
+
+    // We run this asynchronously but don't need the result.
+    // The Python script sends the reply directly to Telegram.
+    // We just need to return a 200 OK to Telegram quickly.
+    pyodide.runPythonAsync(runnerScript).catch(e => console.error("Python script error:", e));
+
+    // Acknowledge the webhook request immediately.
     return new Response('OK', { status: 200 });
+
+  } catch (error) {
+    console.error('Worker error:', error);
+    return new Response(`Error: ${error.message}`, { status: 500 });
+  }
 });
 
-// This endpoint is to set the webhook
-router.get('/set_webhook', async () => {
-    if (!WEBHOOK_URL || !TOKEN) {
-        return new Response('Missing WEBHOOK_URL or TELEGRAM_TOKEN environment variables', { status: 500 });
-    }
-    const webhookFullUrl = `${WEBHOOK_URL}/${TOKEN}`;
-    const success = await bot.telegram.setWebhook(webhookFullUrl);
-    if (success) {
-        return new Response(`Webhook set successfully to ${webhookFullUrl}`);
-    } else {
-        return new Response('Error setting webhook', { status: 500 });
-    }
-});
+// A root route to confirm the worker is running.
+router.get('/', () => new Response('Your Python Telegram Bot Worker is running!'));
 
-// A root endpoint to check if the worker is running
-router.get('/', () => new Response('Bot is running'));
+// Catch-all for any other requests.
+router.all('*', () => new Response('Not Found.', { status: 404 }));
 
-// Catch-all for any other request
-router.all('*', () => new Response('Not Found', { status: 404 }));
-
-
-// --- Cloudflare Worker Entrypoint ---
 export default {
-    async fetch(request, env, ctx) {
-        // Make environment variables available globally for the bot
-        globalThis.env = env;
-        return router.handle(request);
-    }
+  async fetch(request, env, ctx) {
+    // We use ctx.waitUntil to allow the async Python script to complete
+    // even after we have sent the 'OK' response to Telegram.
+    const response = router.handle(request, env, ctx);
+    ctx.waitUntil(response);
+    return response;
+  },
 };

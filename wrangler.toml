@@ -1,3 +1,6 @@
-name = "telegram-bot-worker-js"
+name = "python-telegram-bot-pyodide-worker"
 main = "index.js"
 compatibility_date = "2024-03-06"
+
+# Enable Node.js compatibility for Pyodide
+compatibility_flags = [ "nodejs_compat" ]
