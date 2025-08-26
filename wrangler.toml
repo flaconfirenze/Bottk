@@ -1,4 +1,4 @@
-name = "python-telegram-bot-pyodide-worker"
+name = "nabout"
 main = "index.js"
 compatibility_date = "2024-03-06"
 

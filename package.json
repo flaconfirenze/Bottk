@@ -8,9 +8,10 @@
   },
   "dependencies": {
     "itty-router": "^5.0.17",
-    "pyodide": "^0.25.1"
+    "pyodide": "^0.25.1",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0"
+    "wrangler": "^4.0.0"
   }
 }
