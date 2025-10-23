@@ -361,7 +361,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
       final buffer = StringBuffer();
       chunk.forEach((key, value) {
-        buffer.writeln("$key=$value");
+        final escapedKey = _escapeProperty(key, isKey: true);
+        final escapedValue = _escapeProperty(value);
+        buffer.writeln("$escapedKey=$escapedValue");
       });
       final propertiesBytes = utf8.encode(buffer.toString());
 
@@ -422,6 +424,11 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ],
             ),
+            if (_isBusy)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: CircularProgressIndicator(),
+              ),
             const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
