@@ -1,0 +1,27 @@
+name: Android Release
+
+on:
+  push:
+    tags: [ "v*.*.*" ]
+
+env:
+  FLUTTER_VERSION: "3.24.5"   # use latest stable
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - run: mv build/app/outputs/flutter-apk/app-release.apk RevEngi-Android.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: RevEngi-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
